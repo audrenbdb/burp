@@ -16,4 +16,4 @@ By default, in-memory repository is used, even though a working implementation o
 
 To test our external dependencies, a few mocks are generated from https://github.com/golang/mock with `go generate`.
 
-To test our usecases, in-memory implementation of repository is used.
+To test our usecases, in-memory implementation of repository is used. 
