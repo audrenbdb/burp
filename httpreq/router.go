@@ -4,20 +4,19 @@ import (
 	"burp"
 	"context"
 	"net/http"
-	"sort"
 )
 
 //go:generate mockgen -source $GOFILE -destination ../mock/$GOFILE -package mock -mock_names Service=Service
 
 func NewHandler(service Service) http.Handler {
-	r := router{}
+	r := &router{}
 	r.Get("/v1/beers", handleGetBeers(service))
 
 	r.Put("/v1/beers/", handlePutBeer(service))
 	r.Get("/v1/beers/", handleGetOneBeer(service))
 	r.Delete("/v1/beers/", handleDeleteBeer(service))
 
-	return r.Mux()
+	return r
 }
 
 type Service interface {
@@ -46,6 +45,7 @@ type (
 )
 
 type router struct {
+	mux       *http.ServeMux
 	endpoints []endpoint
 }
 
@@ -57,16 +57,15 @@ type endpoint struct {
 // map of method:handler
 type handlers map[string]handler
 
-func (r *router) Mux() *http.ServeMux {
-	mux := http.NewServeMux()
-	endpoints := r.endpoints
-	sort.Slice(endpoints, func(i, j int) bool {
-		return len(endpoints[i].pattern) > len(endpoints[j].pattern)
-	})
-	for _, ep := range endpoints {
-		mux.Handle(ep.pattern, ep.handlers)
+func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if r.mux == nil {
+		r.mux = http.NewServeMux()
+		endpoints := r.endpoints
+		for _, ep := range endpoints {
+			r.mux.Handle(ep.pattern, ep.handlers)
+		}
 	}
-	return mux
+	r.mux.ServeHTTP(w, req)
 }
 
 func (r *router) Get(pattern string, handler handler) {
@@ -91,7 +90,6 @@ func (r *router) setEndpoint(method, pattern string, h handler) {
 	}
 	ep, ok := r.matchingEndpoint(pattern)
 	if !ok {
-		ep = endpoint{pattern: pattern, handlers: map[string]handler{}}
 		r.endpoints = append(r.endpoints, ep)
 	}
 	ep.handlers[method] = h
@@ -103,7 +101,7 @@ func (r router) matchingEndpoint(pattern string) (endpoint, bool) {
 			return ep, true
 		}
 	}
-	return endpoint{}, false
+	return endpoint{pattern: pattern, handlers: map[string]handler{}}, false
 }
 
 func (h handlers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
