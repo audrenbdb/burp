@@ -1,71 +1,53 @@
-package httpreq
+package router
 
 import (
 	"burp"
-	"context"
+	"fmt"
+	"log"
 	"net/http"
-)
-
-//go:generate mockgen -source $GOFILE -destination ../mock/$GOFILE -package mock -mock_names Service=Service
-
-func NewHandler(service Service) http.Handler {
-	r := &router{}
-	r.Get("/v1/beers", handleGetBeers(service))
-
-	r.Put("/v1/beers/", handlePutBeer(service))
-	r.Get("/v1/beers/", handleGetOneBeer(service))
-	r.Delete("/v1/beers/", handleDeleteBeer(service))
-
-	return r
-}
-
-type Service interface {
-	BeerSaver
-	BeerDeleter
-	BeerGetter
-	BeerSearcher
-}
-
-type (
-	// custom handler with error attached to centralize error handling
-	handler func(w http.ResponseWriter, r *http.Request) error
-
-	BeerSaver interface {
-		SaveBeer(ctx context.Context, beer burp.Beer) error
-	}
-	BeerDeleter interface {
-		DeleteBeer(ctx context.Context, name string) error
-	}
-	BeerGetter interface {
-		GetBeerByName(ctx context.Context, name string) (burp.Beer, error)
-	}
-	BeerSearcher interface {
-		SearchBeers(ctx context.Context, filter burp.BeerFilter) ([]burp.Beer, error)
-	}
+	"sync"
 )
 
 type router struct {
+	muxMutex  sync.Mutex
 	mux       *http.ServeMux
 	endpoints []endpoint
 }
 
+// New creates a new router based on http.ServeMux
+func New() *router {
+	return &router{endpoints: []endpoint{}}
+}
+
 type endpoint struct {
-	pattern  string
-	handlers handlers
+	pattern       string
+	methodHandler handlers
 }
 
 // map of method:handler
 type handlers map[string]handler
 
+// custom handler with error attached to centralize error handling
+type handler = func(w http.ResponseWriter, r *http.Request) error
+
 func (r *router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if r.mux == nil {
-		r.mux = http.NewServeMux()
-		endpoints := r.endpoints
-		for _, ep := range endpoints {
-			r.mux.Handle(ep.pattern, ep.handlers)
-		}
+		r.initMux()
 	}
 	r.mux.ServeHTTP(w, req)
+}
+
+func (r *router) initMux() {
+	r.muxMutex.Lock()
+	defer r.muxMutex.Unlock()
+	if r.mux != nil {
+		return
+	}
+	r.mux = http.NewServeMux()
+	endpoints := r.endpoints
+	for _, ep := range endpoints {
+		r.mux.Handle(ep.pattern, ep.methodHandler)
+	}
 }
 
 func (r *router) Get(pattern string, handler handler) {
@@ -85,23 +67,30 @@ func (r *router) Delete(pattern string, handler handler) {
 }
 
 func (r *router) setEndpoint(method, pattern string, h handler) {
-	if r.endpoints == nil {
-		r.endpoints = []endpoint{}
+	ep := r.findEndpoint(pattern)
+	if ep == nil {
+		newEndpoint := endpoint{
+			pattern:       pattern,
+			methodHandler: map[string]handler{},
+		}
+		r.endpoints = append(r.endpoints, newEndpoint)
+		ep = &newEndpoint
 	}
-	ep, ok := r.matchingEndpoint(pattern)
-	if !ok {
-		r.endpoints = append(r.endpoints, ep)
+	_, alreadyRegistered := ep.methodHandler[method]
+	if alreadyRegistered {
+		m := fmt.Sprintf("method %s already registered with pattern %s", method, pattern)
+		log.Fatal(m)
 	}
-	ep.handlers[method] = h
+	ep.methodHandler[method] = h
 }
 
-func (r router) matchingEndpoint(pattern string) (endpoint, bool) {
+func (r router) findEndpoint(pattern string) *endpoint {
 	for _, ep := range r.endpoints {
 		if ep.pattern == pattern {
-			return ep, true
+			return &ep
 		}
 	}
-	return endpoint{pattern: pattern, handlers: map[string]handler{}}, false
+	return nil
 }
 
 func (h handlers) ServeHTTP(w http.ResponseWriter, r *http.Request) {

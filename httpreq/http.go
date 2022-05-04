@@ -2,12 +2,51 @@ package httpreq
 
 import (
 	"burp"
+	"burp/router"
+	"context"
 	"encoding/json"
 	"net/http"
 	"path"
 	"strconv"
 	"strings"
 )
+
+//go:generate mockgen -source $GOFILE -destination ../mock/$GOFILE -package mock -mock_names Service=Service
+
+func NewHandler(service Service) http.Handler {
+	r := router.New()
+	r.Get("/v1/beers", handleGetBeers(service))
+
+	r.Put("/v1/beers/", handlePutBeer(service))
+	r.Get("/v1/beers/", handleGetOneBeer(service))
+	r.Delete("/v1/beers/", handleDeleteBeer(service))
+	return r
+}
+
+type Service interface {
+	BeerSaver
+	BeerDeleter
+	BeerGetter
+	BeerSearcher
+}
+
+type (
+	BeerSaver interface {
+		SaveBeer(ctx context.Context, beer burp.Beer) error
+	}
+	BeerDeleter interface {
+		DeleteBeer(ctx context.Context, name string) error
+	}
+	BeerGetter interface {
+		GetBeerByName(ctx context.Context, name string) (burp.Beer, error)
+	}
+	BeerSearcher interface {
+		SearchBeers(ctx context.Context, filter burp.BeerFilter) ([]burp.Beer, error)
+	}
+)
+
+// handler is a custom http.HandlerFunc with an error attached
+type handler func(w http.ResponseWriter, r *http.Request) error
 
 func handlePutBeer(saver BeerSaver) handler {
 	return func(w http.ResponseWriter, r *http.Request) error {
